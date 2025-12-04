@@ -30,8 +30,7 @@ in
         ExecStart = "${server-package}/bin/ldbgames-server";
         Restart = "always";
         Environment = ''
-          LDBGAMES_DATA=${cfg.dataDir}/data/games.json
-          LDBGAMES_STATIC=${cfg.dataDir}/static
+          LDBGAMES_DATADIR=${cfg.dataDir}
         '';
       };
     };

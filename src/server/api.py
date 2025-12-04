@@ -1,13 +1,13 @@
 from fastapi import FastAPI, HTTPException
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pathlib import Path
 import json
 import uvicorn
 import os
 
-BASE_DIR = Path(__file__).parent
-DATA_FILE = Path(os.environ.get("LDBGAMES_DATA", BASE_DIR / "data/games.json"))
-STATIC_DIR = Path(os.environ.get("LDBGAMES_STATIC", BASE_DIR / "static"))
+BASE_DIR = Path(os.environ.get("LDBGAMES_DATADIR", Path(__file__).parent))
+DATA_FILE = Path(BASE_DIR / "data/games.json")
+STATIC_DIR = Path(BASE_DIR / "static")
 
 with open(DATA_FILE, "r") as f:
     games_data = json.load(f)
@@ -40,6 +40,15 @@ def game_metadata(game_id: str):
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
     return game
+
+@app.get("/api/games/{game_id}/download")
+def game_download(game_id: str):
+    game = get_game(game_id)
+    return FileResponse(
+        path= STATIC_DIR / game["url"],
+        filename=f"{game["id"]}-{game["version"]}.tar.gz",
+        media_type="application/gzip"
+    )
 
 def main():
     uvicorn.run(app, host="0.0.0.0", port=8000)
