@@ -4,6 +4,7 @@ from pathlib import Path
 import json
 import uvicorn
 import os
+import shutil
 
 BASE_DIR = Path(os.environ.get("LDBGAMES_DATADIR", Path(__file__).parent))
 DATA_FILE = Path(BASE_DIR / "data/games.json")
@@ -29,7 +30,6 @@ def list_games():
             "version": g["version"],
             "url": g["url"],
             "binary": g["binary"],
-            "sha256": g["sha256"],
             "img": g.get("img", None),
         } for g in games_data
     ]
@@ -49,6 +49,23 @@ def game_download(game_id: str):
         filename=f"{game["id"]}-{game["version"]}.tar.gz",
         media_type="application/gzip"
     )
+
+@app.get("/api/games/{game_id}/img/{img_id}")
+def game_header(game_id: str, img_id: str):
+    game = get_game(game_id)
+    img = game.get("img", None)
+    if not img:
+        raise HTTPException(status_code=404, detail="This game has no images")
+    
+    img_name = img.get(img_id, None)
+    if not img_name:
+        raise HTTPException(status_code=404, detail=f"Specified Image not found: {img_id}")
+    
+    img_path = STATIC_DIR / "img" / game_id / img_name
+    if not img_path.exists():
+        raise HTTPException(status_code=404, detail=f"Image file not found on server: {img_id}")
+    
+    return FileResponse(path = img_path, filename=img_name, media_type=f"image/{img_path.suffix}")
 
 def main():
     uvicorn.run(app, host="0.0.0.0", port=8000)
