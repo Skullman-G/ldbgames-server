@@ -7,11 +7,19 @@ import os
 import shutil
 
 BASE_DIR = Path(os.environ.get("LDBGAMES_DATADIR", Path(__file__).parent))
-DATA_FILE = Path(BASE_DIR / "data/games.json")
+GAME_DATA_FILE = Path(BASE_DIR / "data/games.json")
+EMULATOR_DATA_FILE = Path(BASE_DIR / "data/emulators.json")
 STATIC_DIR = Path(BASE_DIR / "static")
 
-with open(DATA_FILE, "r") as f:
-    games_data = json.load(f)
+games_data = []
+if GAME_DATA_FILE.exists():
+    with open(GAME_DATA_FILE, "r") as f:
+        games_data = json.load(f)
+
+emulators_data = []
+if EMULATOR_DATA_FILE.exists():
+    with open(EMULATOR_DATA_FILE, "r") as f:
+        emulators_data = json.load(f)
 
 app = FastAPI(title="LDBGames API")
 
@@ -19,6 +27,12 @@ def get_game(game_id: str):
     for game in games_data:
         if game["id"] == game_id:
             return game
+    return None
+
+def get_emulator(emulator_id: str):
+    for emulator in emulators_data:
+        if emulator["id"] == emulator_id:
+            return emulator
     return None
 
 @app.get("/api/games")
@@ -51,7 +65,7 @@ def game_download(game_id: str):
     )
 
 @app.get("/api/games/{game_id}/img/{img_id}")
-def game_header(game_id: str, img_id: str):
+def game_img(game_id: str, img_id: str):
     game = get_game(game_id)
     img = game.get("img", None)
     if not img:
@@ -65,7 +79,22 @@ def game_header(game_id: str, img_id: str):
     if not img_path.exists():
         raise HTTPException(status_code=404, detail=f"Image file not found on server: {img_id}")
     
-    return FileResponse(path = img_path, filename=img_name, media_type=f"image/{img_path.suffix}")
+    return FileResponse(path=img_path, filename=img_name, media_type=f"image/{img_path.suffix}")
+
+@app.get("/api/emulators/{emulator_id}/bios")
+def emulator_bios(emulator_id: str):
+    emulator = get_emulator(emulator_id)
+
+    if not emulator:
+        raise HTTPException(status_code=404, detail=f"The emulator with the id {emulator_id} could not be found.")
+    
+    bios_filename = emulator["bios"]
+    bios_path = STATIC_DIR / "bios" / emulator_id / emulator["bios"]
+
+    if not bios_path.exists():
+        raise HTTPException(status_code=404, detail=f"Bios could not be found at path: {bios_path}")
+    
+    return FileResponse(path=bios_path, filename=bios_filename)
 
 def main():
     uvicorn.run(app, host="0.0.0.0", port=8000)
