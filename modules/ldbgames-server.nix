@@ -1,4 +1,4 @@
-{ config, lib, pkgs, server-package, ... }:
+{ config, lib, pkgs, ... }:
 let
   cfg = config.services.ldbgames-server;
 in
@@ -27,7 +27,7 @@ in
       wantedBy = [ "multi-user.target" ];
       after = [ "network.target" ];
       serviceConfig = {
-        ExecStart = "${server-package}/bin/ldbgames-server";
+        ExecStart = "${pkgs.ldbgames-server}/bin/ldbgames-server";
         Restart = "always";
         Environment = ''
           LDBGAMES_DATADIR=${cfg.dataDir}

@@ -4,7 +4,6 @@ from pathlib import Path
 import json
 import uvicorn
 import os
-import shutil
 
 BASE_DIR = Path(os.environ.get("LDBGAMES_DATADIR", Path(__file__).parent))
 DATA_FILE = Path(BASE_DIR / "data/games.json")
@@ -51,7 +50,7 @@ def game_download(game_id: str):
     )
 
 @app.get("/api/games/{game_id}/img/{img_id}")
-def game_header(game_id: str, img_id: str):
+def game_img(game_id: str, img_id: str):
     game = get_game(game_id)
     img = game.get("img", None)
     if not img:

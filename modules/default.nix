@@ -1,0 +1,5 @@
+{
+  imports = [
+    ./ldbgames-server.nix
+  ];
+}

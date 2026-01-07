@@ -8,41 +8,30 @@
   outputs = { self, nixpkgs }:
   let
     system = "x86_64-linux";
-    pkgs = import nixpkgs { inherit system; };
-    python = pkgs.python3;
-    pythonPackages = pkgs.python3Packages;
-
-    server-package = pythonPackages.buildPythonPackage {
-      pname = "ldbgames-server";
-      version = "1.0.0";
-      src = ./.;
-
-      buildInputs = [
-        python
-        pythonPackages.setuptools
-      ];
-
-      propagatedBuildInputs = with pythonPackages; [
-        fastapi
-        uvicorn
-      ];
-
-      pyproject = true;
+    pkgs = import nixpkgs {
+      inherit system;
+      overlays = [ self.overlays.default ];
     };
   in {
     devShell.${system} = pkgs.mkShell {
-      buildInputs = [
-        server-package
+      buildInputs = with pkgs; [
+        ldbgames-server
       ];
 
       shellHook = ''
-        export LDBGAMES_DATA=/home/skully/ldbgames-server/data/games.json
-        export LDBGAMES_STATIC=/home/skully/ldbgames-server/static
-
+        export LDBGAMES_DATADIR=/home/skully/ldbgames-server/
         exec ldbgames-server
       '';
     };
 
-    nixosModules.ldbgames-server = {config, lib, pkgs, ...}: import ./ldbgames-server.nix { inherit config lib pkgs server-package; };
+    overlays = rec {
+      default = ldbgames-server;
+      ldbgames-server = import ./overlay.nix;
+    };
+
+    nixosModules = rec {
+      default = ldbgames-server;
+      ldbgames-server = import ./modules;
+    };
   };
 }
