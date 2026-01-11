@@ -14,6 +14,15 @@ with open(DATA_FILE, "r") as f:
 
 app = FastAPI(title="LDBGames API")
 
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 def get_game(game_id: str):
     for game in games_data:
         if game["id"] == game_id:
@@ -29,7 +38,7 @@ def list_games():
             "version": g["version"],
             "url": g["url"],
             "binary": g["binary"],
-            "img": g.get("img", None),
+            "img": g.get("img", None)
         } for g in games_data
     ]
 
