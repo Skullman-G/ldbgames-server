@@ -16,6 +16,10 @@ pythonPackages.buildPythonPackage {
   propagatedBuildInputs = with pythonPackages; [
     fastapi
     uvicorn
+    sqlalchemy
+    aiosqlite
+    pydantic
+    python-multipart
   ];
 
   pyproject = true;

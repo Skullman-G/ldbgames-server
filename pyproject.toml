@@ -9,7 +9,14 @@ description = "API server for LDBGames"
 authors = [{name = "Ladybugged"}]
 requires-python = ">=3.10"
 
-dependencies = [ "fastapi", "uvicorn[standard]" ]
+dependencies = [ 
+  "fastapi", 
+  "uvicorn[standard]",
+  "sqlalchemy>=2.0",
+  "aiosqlite",
+  "pydantic",
+  "python-multipart"
+]
 
 [project.scripts]
 ldbgames-server = "server.api:main"
