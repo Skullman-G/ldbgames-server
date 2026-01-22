@@ -153,6 +153,15 @@ async def add_game(game: AddGameRequest, db: AsyncSession = Depends(get_db)):
     
     return mk_game_response(new_game)
 
+@app.post("/api/games/{game_id}/delete", status_code=204)
+async def delete_game(game_id: str, db: AsyncSession = Depends(get_db)):
+    game = await get_game(db, game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    
+    await db.delete(game)
+    await db.commit()
+
 @app.post("/api/games/{game_id}/update", response_model=GameResponse)
 async def update_game(game_id: str, game: UpdateGameRequest, db: AsyncSession = Depends(get_db)):
     existing = await get_game(db, game_id)
