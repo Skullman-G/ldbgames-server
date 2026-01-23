@@ -8,13 +8,18 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sess
 from sqlalchemy import select
 from pydantic import BaseModel
 from typing import Optional
-from server.database import Base, Game, GameBuild
+from server.database import Base, Game, GameBuild, Platform
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+
+class PlatformResponse(BaseModel):
+    id: int
+    name: str
 
 class GameBuildResponse(BaseModel):
     version: str
     archive_path: str
+    platform: PlatformResponse
 
 class GameResponse(BaseModel):
     id: str
@@ -77,6 +82,10 @@ async def get_db():
     async with async_session() as session:
         yield session
 
+async def get_platform(db: AsyncSession, platform_id: int) -> Optional[Platform]:
+    result = await db.execute(select(Platform).where(Platform.id == platform_id))
+    return result.scalar_one_or_none()
+
 def validate_archive(filename: str):
     if not filename.endswith(ALLOWED_ARCHIVE_EXTENSION):
         raise HTTPException(
@@ -101,13 +110,26 @@ async def get_game_build(db: AsyncSession, game_id: str, version: str) -> Option
     result = await db.execute(
         select(GameBuild).where(
             GameBuild.game_id == game_id,
-            GameBuild.version == version
+            GameBuild.version == version,
         )
     )
     return result.scalar_one_or_none()
 
 async def mk_game_response(game: Game, db: AsyncSession) -> GameResponse:
     builds = await get_game_builds(db, game.id)
+    builds_response = []
+
+    for b in builds:
+        platform_obj = await get_platform(db, b.platform)
+        builds_response.append(
+            GameBuildResponse(
+                version=b.version,
+                archive_path=b.archive_path,
+                binary_path=b.binary_path,
+                platform=PlatformResponse(id=platform_obj.id, name=platform_obj.name),
+            )
+        )
+
     return GameResponse(
         id=game.id,
         name=game.name,
@@ -116,17 +138,18 @@ async def mk_game_response(game: Game, db: AsyncSession) -> GameResponse:
         hero=get_img_static_path(game.id, "hero", game.hero),
         icon=get_img_static_path(game.id, "icon", game.icon),
         logo=get_img_static_path(game.id, "logo", game.logo),
-        builds=[
-            GameBuildResponse(
-                version=b.version,
-                archive_path=b.archive_path,
-            ) for b in builds
-        ],
+        builds=builds_response,
     )
 
 async def get_game(db: AsyncSession, game_id: str) -> Optional[Game]:
     result = await db.execute(select(Game).where(Game.id == game_id))
     return result.scalar_one_or_none()
+
+@app.get("/api/platforms", response_model=list[PlatformResponse])
+async def list_platforms(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Platform))
+    platforms = result.scalars().all()
+    return [PlatformResponse(id=p.id, name=p.name) for p in platforms]
 
 @app.get("/api/games", response_model=list[GameResponse])
 async def list_games(db: AsyncSession = Depends(get_db)):
@@ -148,6 +171,7 @@ async def add_game_build(
     game_id: str,
     version: str = Form(...),
     binary_path: str = Form(...),
+    platform: int = Form(...),
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
 ):
@@ -164,7 +188,7 @@ async def add_game_build(
 
     suffix = validate_archive(file.filename)
 
-    builds_dir = STATIC_DIR / "builds" / game_id
+    builds_dir = BUILDS_DIR / game_id
     builds_dir.mkdir(parents=True, exist_ok=True)
 
     base_name = f"{game_id}_{version}"
@@ -182,6 +206,7 @@ async def add_game_build(
         version=version,
         binary_path=binary_path,
         archive_path=public_archive_path,
+        platform=platform,
     )
     db.add(build)
     await db.commit()
