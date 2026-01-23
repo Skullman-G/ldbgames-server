@@ -43,6 +43,7 @@ BASE_DIR = Path(os.environ.get("LDBGAMES_DATADIR", Path(__file__).parent))
 DATABASE_URL = f"sqlite+aiosqlite:///{BASE_DIR}/data/games.db"
 STATIC_DIR = BASE_DIR / "static"
 IMAGE_DIR = STATIC_DIR / "img"
+BUILDS_DIR = STATIC_DIR / "builds"
 
 ALLOWED_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
 VALID_IMAGE_FIELDS = ["grid", "header", "hero", "icon", "logo"]
@@ -65,6 +66,11 @@ app.mount(
     "/img",
     StaticFiles(directory=IMAGE_DIR),
     name="img"
+)
+app.mount(
+    "/builds",
+    StaticFiles(directory=BUILDS_DIR),
+    name="builds"
 )
 
 async def get_db():
@@ -90,6 +96,15 @@ def get_img_static_path(game_id: str, image_type: str, img_name: str):
 async def get_game_builds(db: AsyncSession, game_id: str) -> list[GameBuild]:
     result = await db.execute(select(GameBuild).where(GameBuild.game_id == game_id))
     return result.scalars().all()
+
+async def get_game_build(db: AsyncSession, game_id: str, version: str) -> Optional[GameBuild]:
+    result = await db.execute(
+        select(GameBuild).where(
+            GameBuild.game_id == game_id,
+            GameBuild.version == version
+        )
+    )
+    return result.scalar_one_or_none()
 
 async def mk_game_response(game: Game, db: AsyncSession) -> GameResponse:
     builds = await get_game_builds(db, game.id)
@@ -139,6 +154,13 @@ async def add_game_build(
     game = await get_game(db, game_id)
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
+    
+    existing_build = await get_game_build(db, game_id, version)
+    if existing_build:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Build version '{version}' already exists for this game"
+        )
 
     suffix = validate_archive(file.filename)
 
@@ -153,11 +175,13 @@ async def add_game_build(
         buffer.write(content)
         archive_path = buffer.name
 
+    public_archive_path = f"/builds/{game_id}/{Path(archive_path).name}"
+
     build = GameBuild(
         game_id=game_id,
         version=version,
         binary_path=binary_path,
-        archive_path=str(archive_path),
+        archive_path=public_archive_path,
     )
     db.add(build)
     await db.commit()
