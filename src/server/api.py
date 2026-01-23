@@ -1,6 +1,5 @@
 from fastapi import FastAPI, HTTPException, Depends
-from fastapi.responses import FileResponse
-from fastapi import UploadFile, File
+from fastapi import UploadFile, File, Form
 from pathlib import Path
 import json
 import uvicorn
@@ -9,9 +8,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sess
 from sqlalchemy import select
 from pydantic import BaseModel
 from typing import Optional
-from server.database import Base, Game
+from server.database import Base, Game, GameBuild
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+
+class GameBuildResponse(BaseModel):
+    version: str
+    archive_path: str
 
 class GameResponse(BaseModel):
     id: str
@@ -21,6 +24,7 @@ class GameResponse(BaseModel):
     hero: str
     icon: str
     logo: str
+    builds: list[GameBuildResponse]
 
 class AddGameRequest(BaseModel):
     id: str
@@ -40,8 +44,10 @@ DATABASE_URL = f"sqlite+aiosqlite:///{BASE_DIR}/data/games.db"
 STATIC_DIR = BASE_DIR / "static"
 IMAGE_DIR = STATIC_DIR / "img"
 
-ALLOWED_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
+ALLOWED_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
 VALID_IMAGE_FIELDS = ["grid", "header", "hero", "icon", "logo"]
+
+ALLOWED_ARCHIVE_EXTENSION = ".tar.gz"
 
 engine = create_async_engine(DATABASE_URL, echo=False)
 async_session = async_sessionmaker(engine, expire_on_commit=False)
@@ -65,6 +71,14 @@ async def get_db():
     async with async_session() as session:
         yield session
 
+def validate_archive(filename: str):
+    if not filename.endswith(ALLOWED_ARCHIVE_EXTENSION):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported archive type. Allowed: {', '.join(ALLOWED_ARCHIVE_EXTENSION)}"
+        )
+    return ALLOWED_ARCHIVE_EXTENSION
+
 def get_img_static_path(game_id: str, image_type: str, img_name: str):
     img_path = STATIC_DIR / "img" / game_id / image_type / img_name
     if not img_path.exists() or img_path.is_dir():
@@ -73,7 +87,12 @@ def get_img_static_path(game_id: str, image_type: str, img_name: str):
     static_img_path = f"/img/{game_id}/{image_type}/{img_name}"
     return static_img_path
 
-def mk_game_response(game: Game) -> GameResponse:
+async def get_game_builds(db: AsyncSession, game_id: str) -> list[GameBuild]:
+    result = await db.execute(select(GameBuild).where(GameBuild.game_id == game_id))
+    return result.scalars().all()
+
+async def mk_game_response(game: Game, db: AsyncSession) -> GameResponse:
+    builds = await get_game_builds(db, game.id)
     return GameResponse(
         id=game.id,
         name=game.name,
@@ -82,6 +101,12 @@ def mk_game_response(game: Game) -> GameResponse:
         hero=get_img_static_path(game.id, "hero", game.hero),
         icon=get_img_static_path(game.id, "icon", game.icon),
         logo=get_img_static_path(game.id, "logo", game.logo),
+        builds=[
+            GameBuildResponse(
+                version=b.version,
+                archive_path=b.archive_path,
+            ) for b in builds
+        ],
     )
 
 async def get_game(db: AsyncSession, game_id: str) -> Optional[Game]:
@@ -93,7 +118,7 @@ async def list_games(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Game))
     games = result.scalars().all()
     return [
-        mk_game_response(g) for g in games
+        await mk_game_response(g, db) for g in games
     ]
 
 @app.get("/api/games/{game_id}", response_model=GameResponse)
@@ -101,18 +126,43 @@ async def game_metadata(game_id: str, db: AsyncSession = Depends(get_db)):
     game = await get_game(db, game_id)
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
-    return mk_game_response(game)
+    return await mk_game_response(game, db)
 
-@app.get("/api/games/{game_id}/download")
-async def game_download(game_id: str, db: AsyncSession = Depends(get_db)):
+@app.post("/api/games/{game_id}/build/add", response_model=GameResponse)
+async def add_game_build(
+    game_id: str,
+    version: str = Form(...),
+    binary_path: str = Form(...),
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+):
     game = await get_game(db, game_id)
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
-    return FileResponse(
-        path= STATIC_DIR / game.url,
-        filename=f"{game.id}-{game.version}.tar.gz",
-        media_type="application/gzip"
+
+    suffix = validate_archive(file.filename)
+
+    builds_dir = STATIC_DIR / "builds" / game_id
+    builds_dir.mkdir(parents=True, exist_ok=True)
+
+    base_name = f"{game_id}_{version}"
+    archive_base = builds_dir / base_name
+
+    content = await file.read()
+    with create_unique_file(archive_base, suffix, "b") as buffer:
+        buffer.write(content)
+        archive_path = buffer.name
+
+    build = GameBuild(
+        game_id=game_id,
+        version=version,
+        binary_path=binary_path,
+        archive_path=str(archive_path),
     )
+    db.add(build)
+    await db.commit()
+
+    return await mk_game_response(game, db)
 
 @app.get("/api/games/{game_id}/img/{image_type}/list")
 async def game_img_all(game_id: str, image_type: str, limit: int = 50, offset: int = 0, db: AsyncSession = Depends(get_db)):
@@ -128,7 +178,7 @@ async def game_img_all(game_id: str, image_type: str, limit: int = 50, offset: i
     files = sorted(img_type_dir.iterdir())
     images = [
         f"/img/{game_id}/{image_type}/{f.name}" for f in files
-        if f.name.lower().endswith(ALLOWED_EXTENSIONS)
+        if f.name.lower().endswith(ALLOWED_IMAGE_EXTENSIONS)
     ]
     return images[offset: offset + limit]
 
@@ -151,7 +201,7 @@ async def add_game(game: AddGameRequest, db: AsyncSession = Depends(get_db)):
     await db.commit()
     await db.refresh(new_game)
     
-    return mk_game_response(new_game)
+    return await mk_game_response(new_game, db)
 
 @app.post("/api/games/{game_id}/delete", status_code=204)
 async def delete_game(game_id: str, db: AsyncSession = Depends(get_db)):
@@ -179,7 +229,7 @@ async def update_game(game_id: str, game: UpdateGameRequest, db: AsyncSession = 
     await db.commit()
     await db.refresh(existing)
 
-    return mk_game_response(existing)
+    return await mk_game_response(existing, db)
 
 def create_unique_file(base_name, suffix, write_mode="b"):
     i = 0
@@ -201,8 +251,8 @@ async def game_img_upload(game_id: str, image_type: str, file: UploadFile = File
         raise HTTPException(status_code=404, detail="Game not found")
 
     suffix = Path(file.filename).suffix.lower()
-    if suffix not in ALLOWED_EXTENSIONS:
-        raise HTTPException(status_code=400, detail=f"Unsupported file type. Allowed: {', '.join(ALLOWED_EXTENSIONS)}")
+    if suffix not in ALLOWED_IMAGE_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type. Allowed: {', '.join(ALLOWED_IMAGE_EXTENSIONS)}")
     
     img_folder = STATIC_DIR / "img" / game_id / image_type
     img_folder.mkdir(parents=True, exist_ok=True)

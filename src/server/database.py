@@ -7,8 +7,9 @@ class Base(DeclarativeBase):
 class GameBuild(Base):
     __tablename__ = "game_builds"
 
-    gameid: Mapped[str] = mapped_column(ForeignKey("games.id"), primary_key=True)
+    game_id: Mapped[str] = mapped_column(ForeignKey("games.id"), primary_key=True)
     version: Mapped[str] = mapped_column(primary_key=True)
+    archive_path: Mapped[str]
     binary_path: Mapped[str]
 
 class Game(Base):
