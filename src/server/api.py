@@ -36,14 +36,6 @@ class AddGameRequest(BaseModel):
     id: str
     name: str
 
-class UpdateGameRequest(BaseModel):
-    name: str
-    grid: str
-    header: str
-    hero: str
-    icon: str
-    logo: str
-
 
 BASE_DIR = Path(os.environ.get("LDBGAMES_DATADIR", Path(__file__).parent))
 DATABASE_URL = f"sqlite+aiosqlite:///{BASE_DIR}/data/games.db"
@@ -91,13 +83,12 @@ def validate_archive(filename: str):
         )
     return ALLOWED_ARCHIVE_EXTENSION
 
-def get_img_static_path(game_id: str, image_type: str, img_name: str):
-    img_path = STATIC_DIR / "img" / game_id / image_type / img_name
-    if not img_path.exists() or img_path.is_dir():
+def get_img_static_path(image_path: str):
+    full_path = STATIC_DIR / image_path.lstrip('/')
+    if not full_path.exists() or full_path.is_dir():
         return ""
     
-    static_img_path = f"/img/{game_id}/{image_type}/{img_name}"
-    return static_img_path
+    return image_path
 
 async def mk_game_response(db: AsyncSession, game: Game) -> GameResponse:
     builds = await crud.list_game_builds(db, game.id)
@@ -119,11 +110,11 @@ async def mk_game_response(db: AsyncSession, game: Game) -> GameResponse:
     return GameResponse(
         id=game.id,
         name=game.name,
-        grid=get_img_static_path(game.id, "grid", game.grid),
-        header=get_img_static_path(game.id, "header", game.header),
-        hero=get_img_static_path(game.id, "hero", game.hero),
-        icon=get_img_static_path(game.id, "icon", game.icon),
-        logo=get_img_static_path(game.id, "logo", game.logo),
+        grid=get_img_static_path(game.grid),
+        header=get_img_static_path(game.header),
+        hero=get_img_static_path(game.hero),
+        icon=get_img_static_path(game.icon),
+        logo=get_img_static_path(game.logo),
         builds=build_responses,
     )
 
@@ -272,17 +263,26 @@ async def delete_game(game_id: str, db: AsyncSession = Depends(get_db)):
     await db.commit()
 
 @app.post("/api/games/{game_id}/update", response_model=GameResponse)
-async def update_game(game_id: str, game: UpdateGameRequest, db: AsyncSession = Depends(get_db)):
+async def update_game_metadata(
+    game_id: str,
+    game_name: str = Form(...),
+    grid_path: str = Form(...),
+    header_path: str = Form(...),
+    hero_path: str = Form(...),
+    icon_path: str = Form(...),
+    logo_path: str = Form(...),
+    db: AsyncSession = Depends(get_db)
+):
     existing = await crud.get_game(db, game_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Game not found")
 
-    existing.name = game.name
-    existing.grid = game.grid
-    existing.header = game.header
-    existing.hero = game.hero
-    existing.icon = game.icon
-    existing.logo = game.logo
+    existing.name = game_name
+    existing.grid = grid_path
+    existing.header = header_path
+    existing.hero = hero_path
+    existing.icon = icon_path
+    existing.logo = logo_path
 
     db.add(existing)
     await db.commit()
