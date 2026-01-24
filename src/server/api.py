@@ -232,6 +232,18 @@ async def game_img_all(game_id: str, image_type: str, limit: int = 50, offset: i
     ]
     return images[offset: offset + limit]
 
+@app.post("/api/games/{game_id}/img/delete")
+async def game_delete_img(game_id: str, image_path: str = Form(...), db: AsyncSession = Depends(get_db)):
+    game = crud.get_game(db, game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    
+    fs_path = STATIC_DIR / image_path.lstrip("/")
+    if not fs_path.exists() or fs_path.is_dir():
+        raise HTTPException(status_code=400, detail="Invalid image path")
+    
+    fs_path.unlink()
+
 @app.post("/api/games/add", response_model=GameResponse)
 async def add_game(game: AddGameRequest, db: AsyncSession = Depends(get_db)):
     existing = await crud.get_game(db, game.id)
