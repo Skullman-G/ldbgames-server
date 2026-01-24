@@ -17,7 +17,7 @@ class GameBuild(Base):
     version: Mapped[str] = mapped_column(primary_key=True)
     archive_path: Mapped[str]
     binary_path: Mapped[str]
-    platform: Mapped[int] = mapped_column(ForeignKey("platform.id"), primary_key=True)
+    platform_id: Mapped[int] = mapped_column(ForeignKey("platform.id"), primary_key=True)
 
 
 class Game(Base):

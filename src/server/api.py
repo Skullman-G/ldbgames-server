@@ -11,6 +11,7 @@ from typing import Optional
 from server.database import Base, Game, GameBuild, Platform
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+import server.crud as crud
 
 class PlatformResponse(BaseModel):
     id: int
@@ -82,10 +83,6 @@ async def get_db():
     async with async_session() as session:
         yield session
 
-async def get_platform(db: AsyncSession, platform_id: int) -> Optional[Platform]:
-    result = await db.execute(select(Platform).where(Platform.id == platform_id))
-    return result.scalar_one_or_none()
-
 def validate_archive(filename: str):
     if not filename.endswith(ALLOWED_ARCHIVE_EXTENSION):
         raise HTTPException(
@@ -102,31 +99,20 @@ def get_img_static_path(game_id: str, image_type: str, img_name: str):
     static_img_path = f"/img/{game_id}/{image_type}/{img_name}"
     return static_img_path
 
-async def get_game_builds(db: AsyncSession, game_id: str) -> list[GameBuild]:
-    result = await db.execute(select(GameBuild).where(GameBuild.game_id == game_id))
-    return result.scalars().all()
+async def mk_game_response(db: AsyncSession, game: Game) -> GameResponse:
+    builds = await crud.list_game_builds(db, game.id)
 
-async def get_game_build(db: AsyncSession, game_id: str, version: str) -> Optional[GameBuild]:
-    result = await db.execute(
-        select(GameBuild).where(
-            GameBuild.game_id == game_id,
-            GameBuild.version == version,
-        )
-    )
-    return result.scalar_one_or_none()
-
-async def mk_game_response(game: Game, db: AsyncSession) -> GameResponse:
-    builds = await get_game_builds(db, game.id)
-    builds_response = []
-
+    build_responses = []
     for b in builds:
-        platform_obj = await get_platform(db, b.platform)
-        builds_response.append(
+        platform = await crud.get_platform(db, b.platform_id)
+        build_responses.append(
             GameBuildResponse(
                 version=b.version,
                 archive_path=b.archive_path,
-                binary_path=b.binary_path,
-                platform=PlatformResponse(id=platform_obj.id, name=platform_obj.name),
+                platform=PlatformResponse(
+                    id=platform.id,
+                    name=platform.name,
+                ),
             )
         )
 
@@ -138,12 +124,8 @@ async def mk_game_response(game: Game, db: AsyncSession) -> GameResponse:
         hero=get_img_static_path(game.id, "hero", game.hero),
         icon=get_img_static_path(game.id, "icon", game.icon),
         logo=get_img_static_path(game.id, "logo", game.logo),
-        builds=builds_response,
+        builds=build_responses,
     )
-
-async def get_game(db: AsyncSession, game_id: str) -> Optional[Game]:
-    result = await db.execute(select(Game).where(Game.id == game_id))
-    return result.scalar_one_or_none()
 
 @app.get("/api/platforms", response_model=list[PlatformResponse])
 async def list_platforms(db: AsyncSession = Depends(get_db)):
@@ -152,38 +134,45 @@ async def list_platforms(db: AsyncSession = Depends(get_db)):
     return [PlatformResponse(id=p.id, name=p.name) for p in platforms]
 
 @app.get("/api/games", response_model=list[GameResponse])
-async def list_games(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Game))
-    games = result.scalars().all()
-    return [
-        await mk_game_response(g, db) for g in games
-    ]
+async def list_games_endpoint(db: AsyncSession = Depends(get_db)):
+    games = await crud.list_games(db)
+    return [await mk_game_response(db, g) for g in games]
 
 @app.get("/api/games/{game_id}", response_model=GameResponse)
 async def game_metadata(game_id: str, db: AsyncSession = Depends(get_db)):
-    game = await get_game(db, game_id)
+    game = await crud.get_game(db, game_id)
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
-    return await mk_game_response(game, db)
+    return await mk_game_response(db, game)
 
 @app.post("/api/games/{game_id}/build/add", response_model=GameResponse)
 async def add_game_build(
     game_id: str,
     version: str = Form(...),
     binary_path: str = Form(...),
-    platform: int = Form(...),
+    platform_id: int = Form(...),
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
 ):
-    game = await get_game(db, game_id)
+    game = await crud.get_game(db, game_id)
     if not game:
-        raise HTTPException(status_code=404, detail="Game not found")
-    
-    existing_build = await get_game_build(db, game_id, version)
+        raise HTTPException(
+            status_code=404,
+            detail=f"Game with id '{game_id} not found"
+        )
+
+    existing_build = await crud.get_game_build(db, game_id, version, platform_id)
     if existing_build:
         raise HTTPException(
             status_code=400,
             detail=f"Build version '{version}' already exists for this game"
+        )
+    
+    platform = await crud.get_platform(db, platform_id)
+    if not platform:
+        raise HTTPException(
+            status_code=400,
+            detail="Platform does not exist"
         )
 
     suffix = validate_archive(file.filename)
@@ -191,7 +180,7 @@ async def add_game_build(
     builds_dir = BUILDS_DIR / game_id
     builds_dir.mkdir(parents=True, exist_ok=True)
 
-    base_name = f"{game_id}_{version}"
+    base_name = f"{game_id}_{platform.name}_{version}"
     archive_base = builds_dir / base_name
 
     content = await file.read()
@@ -206,19 +195,40 @@ async def add_game_build(
         version=version,
         binary_path=binary_path,
         archive_path=public_archive_path,
-        platform=platform,
+        platform_id=platform_id,
     )
     db.add(build)
     await db.commit()
 
-    return await mk_game_response(game, db)
+    return await mk_game_response(db, game)
+
+@app.post("/api/games/{game_id}/build/delete", response_model=GameResponse)
+async def delete_game_build_endpoint(
+    game_id: str,
+    version: str = Form(...),
+    platform_id: int = Form(...),
+    db: AsyncSession = Depends(get_db),
+):
+    archive_path = await crud.delete_game_build(
+        db, game_id, version, platform_id
+    )
+
+    if not archive_path:
+        raise HTTPException(status_code=404, detail="Build not found")
+
+    fs_path = STATIC_DIR / archive_path.lstrip("/")
+    fs_path.unlink(missing_ok=True)
+
+    game = await crud.get_game(db, game_id)
+    return await mk_game_response(db, game)
+
 
 @app.get("/api/games/{game_id}/img/{image_type}/list")
 async def game_img_all(game_id: str, image_type: str, limit: int = 50, offset: int = 0, db: AsyncSession = Depends(get_db)):
     if image_type not in VALID_IMAGE_FIELDS:
         raise HTTPException(status_code=400, detail=f"Invalid image type: {image_type}, Must be one of: {', '.join(VALID_IMAGE_FIELDS)}")
     
-    game = await get_game(db, game_id)
+    game = await crud.get_game(db, game_id)
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
     
@@ -233,7 +243,7 @@ async def game_img_all(game_id: str, image_type: str, limit: int = 50, offset: i
 
 @app.post("/api/games/add", response_model=GameResponse)
 async def add_game(game: AddGameRequest, db: AsyncSession = Depends(get_db)):
-    existing = await get_game(db, game.id)
+    existing = await crud.get_game(db, game.id)
     if existing:
         raise HTTPException(status_code=400, detail="Game with this id already exists")
     
@@ -250,11 +260,11 @@ async def add_game(game: AddGameRequest, db: AsyncSession = Depends(get_db)):
     await db.commit()
     await db.refresh(new_game)
     
-    return await mk_game_response(new_game, db)
+    return await mk_game_response(db, new_game)
 
 @app.post("/api/games/{game_id}/delete", status_code=204)
 async def delete_game(game_id: str, db: AsyncSession = Depends(get_db)):
-    game = await get_game(db, game_id)
+    game = await crud.get_game(db, game_id)
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
     
@@ -263,7 +273,7 @@ async def delete_game(game_id: str, db: AsyncSession = Depends(get_db)):
 
 @app.post("/api/games/{game_id}/update", response_model=GameResponse)
 async def update_game(game_id: str, game: UpdateGameRequest, db: AsyncSession = Depends(get_db)):
-    existing = await get_game(db, game_id)
+    existing = await crud.get_game(db, game_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Game not found")
 
@@ -278,7 +288,7 @@ async def update_game(game_id: str, game: UpdateGameRequest, db: AsyncSession = 
     await db.commit()
     await db.refresh(existing)
 
-    return await mk_game_response(existing, db)
+    return await mk_game_response(db, existing)
 
 def create_unique_file(base_name, suffix, write_mode="b"):
     i = 0
@@ -295,7 +305,7 @@ async def game_img_upload(game_id: str, image_type: str, file: UploadFile = File
     if image_type not in VALID_IMAGE_FIELDS:
         raise HTTPException(status_code=400, detail=f"Invalid image type: {image_type}, Must be one of: {', '.join(VALID_IMAGE_FIELDS)}")
     
-    game = await get_game(db, game_id)
+    game = await crud.get_game(db, game_id)
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
 
