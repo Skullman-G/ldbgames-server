@@ -31,11 +31,7 @@ class GameResponse(BaseModel):
     icon: str
     logo: str
     builds: list[GameBuildResponse]
-
-class AddGameRequest(BaseModel):
-    id: str
-    name: str
-
+    description: str
 
 BASE_DIR = Path(os.environ.get("LDBGAMES_DATADIR", Path(__file__).parent))
 DATABASE_URL = f"sqlite+aiosqlite:///{BASE_DIR}/data/games.db"
@@ -116,6 +112,7 @@ async def mk_game_response(db: AsyncSession, game: Game) -> GameResponse:
         icon=get_img_static_path(game.icon),
         logo=get_img_static_path(game.logo),
         builds=build_responses,
+        description=game.description or "",
     )
 
 @app.get("/api/platforms", response_model=list[PlatformResponse])
@@ -245,14 +242,18 @@ async def game_delete_img(game_id: str, image_path: str = Form(...), db: AsyncSe
     fs_path.unlink()
 
 @app.post("/api/games/add", response_model=GameResponse)
-async def add_game(game: AddGameRequest, db: AsyncSession = Depends(get_db)):
-    existing = await crud.get_game(db, game.id)
+async def add_game(
+    game_id: str = Form(...),
+    game_name: str = Form(...),
+    db: AsyncSession = Depends(get_db)
+):
+    existing = await crud.get_game(db, game_id)
     if existing:
         raise HTTPException(status_code=400, detail="Game with this id already exists")
     
     new_game = Game(
-        id=game.id,
-        name=game.name,
+        id=game_id,
+        name=game_name,
         grid='',
         header='',
         hero='',
@@ -283,6 +284,7 @@ async def update_game_metadata(
     hero_path: str = Form(...),
     icon_path: str = Form(...),
     logo_path: str = Form(...),
+    game_description: str = Form(...),
     db: AsyncSession = Depends(get_db)
 ):
     existing = await crud.get_game(db, game_id)
@@ -295,6 +297,7 @@ async def update_game_metadata(
     existing.hero = hero_path
     existing.icon = icon_path
     existing.logo = logo_path
+    existing.description = game_description
 
     db.add(existing)
     await db.commit()

@@ -30,3 +30,4 @@ class Game(Base):
     hero: Mapped[str]
     icon: Mapped[str]
     logo: Mapped[str]
+    description: Mapped[str]
