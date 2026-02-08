@@ -7,7 +7,6 @@ import os
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy import select
 from pydantic import BaseModel
-from typing import Optional
 from server.database import Base, Game, GameBuild, Platform
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -16,6 +15,7 @@ import server.crud as crud
 class PlatformResponse(BaseModel):
     id: int
     name: str
+    used: bool
 
 class GameBuildResponse(BaseModel):
     version: str
@@ -99,6 +99,7 @@ async def mk_game_response(db: AsyncSession, game: Game) -> GameResponse:
                 platform=PlatformResponse(
                     id=platform.id,
                     name=platform.name,
+                    used=True,
                 ),
             )
         )
@@ -119,7 +120,13 @@ async def mk_game_response(db: AsyncSession, game: Game) -> GameResponse:
 async def list_platforms(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Platform))
     platforms = result.scalars().all()
-    return [PlatformResponse(id=p.id, name=p.name) for p in platforms]
+    return [
+        PlatformResponse(
+            id=p.id,
+            name=p.name,
+            used=await crud.platform_has_builds(db, p.id),
+        ) for p in platforms
+    ]
 
 @app.get("/api/games", response_model=list[GameResponse])
 async def list_games_endpoint(db: AsyncSession = Depends(get_db)):
@@ -339,6 +346,54 @@ async def game_img_upload(game_id: str, image_type: str, file: UploadFile = File
         filename = buffer.name
 
     return {"message": f"{image_type} image uploaded successfully", "filename": filename}
+
+@app.post("/api/platforms/add")
+async def platform_add(platform_name: str = Form(...), db: AsyncSession = Depends(get_db)):
+    if not platform_name:
+        raise HTTPException(status_code=400, detail="Invalid platform name")
+    
+    existing_platform = await crud.get_platform_by_name(db, platform_name)
+    if existing_platform:
+        raise HTTPException(status_code=400, detail=f"Platform with the name {platform_name} already exists")
+    
+    new_platform = Platform(
+        name=platform_name,
+    )
+    
+    db.add(new_platform)
+
+    await db.commit()
+    await db.refresh(new_platform)
+
+@app.post("/api/platforms/{platform_id}/delete")
+async def platform_delete(platform_id: str, db: AsyncSession = Depends(get_db)):
+    existing_platform = await crud.get_platform(db, platform_id)
+    if not existing_platform:
+        raise HTTPException(status_code=404, detail=f"Platform with id {platform_id} does not exist")
+    
+    in_use = await crud.platform_has_builds(db, platform_id)
+    
+    if in_use:
+        raise HTTPException(status_code=400, detail=f"Platform with id {platform_id} is still in use and cannot be removed")
+    
+    await db.delete(existing_platform)
+    await db.commit()
+
+@app.post("/api/platforms/{platform_id}/update")
+async def platform_update(platform_id: str, platform_name: str = Form(...), db: AsyncSession = Depends(get_db)):
+    if not platform_name:
+        raise HTTPException(status_code=400, detail="Invalid platform name")
+    
+    platform = await crud.get_platform(db, platform_id)
+    if not platform:
+        raise HTTPException(status_code=400, detail=f"Platform with the name {platform_name} does not exist")
+    
+    platform.name = platform_name
+    
+    db.add(platform)
+
+    await db.commit()
+    await db.refresh(platform)
 
 @app.on_event("startup")
 async def startup_event():

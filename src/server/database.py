@@ -7,8 +7,8 @@ class Base(DeclarativeBase):
 class Platform(Base):
     __tablename__ = "platform"
 
-    id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str]
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(unique=True, nullable=False)
 
 class GameBuild(Base):
     __tablename__ = "game_builds"

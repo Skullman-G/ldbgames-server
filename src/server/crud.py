@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, exists
 from typing import Optional
 from server.database import Game, GameBuild, Platform
 
@@ -43,6 +43,18 @@ async def get_game_build(
     return result.scalar_one_or_none()
 
 
+async def platform_has_builds(
+    db: AsyncSession,
+    platform_id: int
+) -> bool:
+    result = await db.execute(
+        select(
+            exists().where(GameBuild.platform_id == platform_id)
+        )
+    )
+    return result.scalar()
+
+
 async def delete_game_build(
     db: AsyncSession,
     game_id: str,
@@ -67,5 +79,12 @@ async def delete_game_build(
 async def get_platform(db: AsyncSession, platform_id: int) -> Optional[Platform]:
     result = await db.execute(
         select(Platform).where(Platform.id == platform_id)
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_platform_by_name(db: AsyncSession, platform_name: str) -> Optional[Platform]:
+    result = await db.execute(
+        select(Platform).where(Platform.name == platform_name)
     )
     return result.scalar_one_or_none()
