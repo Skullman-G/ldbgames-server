@@ -26,7 +26,7 @@
 
     overlays = rec {
       default = ldbgames-server;
-      ldbgames-server = import ./overlay.nix;
+      ldbgames-server = final: prev: import ./overlay.nix final prev;
     };
 
     nixosModules = rec {
